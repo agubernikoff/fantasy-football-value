@@ -202,6 +202,11 @@ function render() {
       fin: finishRank[pk.player_id] };
     if (fpor != null) teamTotals[pk.draft_slot] = (teamTotals[pk.draft_slot] || 0) + (metric === 'fpor' ? fpor : val);
   }
+  // Sleeper's state.week flips to the upcoming week as soon as the previous one ends, so derive
+  // weeks played from the stats: the most games any team defense has played.
+  const weeksPlayed = Math.max(0, ...stats.filter(r => r.player?.position === 'DEF').map(r => r.stats?.gp || 0));
+  const weekLabel = weeksPlayed >= state.week ? `week ${weeksPlayed} in progress` : `through week ${weeksPlayed}`;
+  data.weeksPlayed = weeksPlayed;
   const vals = Object.values(cells).map(c => c.val).filter(v => v != null && v > 0);
   const max = Math.max(1, ...vals);
 
@@ -209,9 +214,9 @@ function render() {
     + ` · ${rules.pass_td}pt pass TD`;
   const replDesc = POS.filter(p => repl[p] != null).map(p => `${p}${starters[p] + 1} ${repl[p].toFixed(1)}`).join(' · ');
   $('title').textContent = `${league.name} · Draft Value`;
-  $('subtitle').textContent = `${league.season} · ${teams} teams · ${rounds} rounds · ${rulesDesc} · through week ${state.week}`;
+  $('subtitle').textContent = `${league.season} · ${teams} teams · ${rounds} rounds · ${rulesDesc} · ${weekLabel}`;
 
-  let html = `<div class="board-title">${esc(league.name)} · Draft Value · ${league.season} wk ${state.week}</div><table><thead><tr><th style="width:26px"></th>`;
+  let html = `<div class="board-title">${esc(league.name)} · Draft Value · ${league.season} · ${weekLabel}</div><table><thead><tr><th style="width:26px"></th>`;
   for (let s = 1; s <= teams; s++) {
     const u = userById[slotUser[s]];
     const team = u?.metadata?.team_name?.trim() || u?.display_name || `Team ${s}`;
@@ -265,7 +270,7 @@ async function downloadPNG() {
   try {
     const canvas = await html2canvas(board, { useCORS: true, backgroundColor: '#0e0f11', scale: 2 });
     const a = document.createElement('a');
-    a.download = `draft-value-wk${data?.state?.week ?? ''}.png`;
+    a.download = `draft-value-wk${data?.weeksPlayed ?? ''}.png`;
     a.href = canvas.toDataURL('image/png');
     a.click();
   } finally {
