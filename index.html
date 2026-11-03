@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draft Value Board</title>
+<style>
+  :root {
+    --bg: #0e0f11; --panel: #16181b; --line: #2a2d32; --text: #f2f3f5; --muted: #8b9098;
+    --cell-text: #fff; --neg: #5c1416;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: flex-end; justify-content: space-between;
+    padding: 16px; }
+  h1 { margin: 0; font-size: 20px; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  #status { color: var(--muted); font-size: 12px; padding: 0 16px 8px; min-height: 18px; }
+  .scroll { overflow-x: auto; padding: 0 16px 16px; }
+  #board { background: var(--bg); display: inline-block; padding: 12px; }
+  .board-title { display: none; font-weight: 700; font-size: 18px; margin: 0 0 8px 4px; }
+  .exporting .board-title { display: block; }
+  table { border-collapse: separate; border-spacing: 2px; table-layout: fixed; }
+  th { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+    padding: 6px 2px; width: 104px; }
+  th .tn, th .owner { display: block; max-width: 104px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0 auto; }
+  th .owner { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 10px; }
+  th.me { color: #ffd34d; }
+  td.rnd { color: var(--muted); font-size: 12px; text-align: center; width: 26px; }
+  td.pick { width: 104px; height: 112px; border-radius: 4px; padding: 4px 4px 5px; text-align: center;
+    color: var(--cell-text); position: relative; vertical-align: top; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .top { display: flex; justify-content: space-between; font-size: 10px; font-variant-numeric: tabular-nums; opacity: .92; }
+  .img { width: 44px; height: 44px; border-radius: 50%; margin: 4px auto 3px; background: rgba(0,0,0,.35);
+    border: 1px solid rgba(255,255,255,.35); overflow: hidden; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13px; }
+  .img img { width: 100%; height: 100%; object-fit: cover; }
+  .img.def img { width: 80%; height: 80%; object-fit: contain; }
+  .name { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fpor { display: inline-block; margin-top: 2px; font-size: 11px; font-weight: 700; background: rgba(0,0,0,.4);
+    border-radius: 3px; padding: 1px 5px; font-variant-numeric: tabular-nums; }
+  .fin { font-size: 9.5px; opacity: .85; margin-top: 2px; }
+  tr.total td { font-weight: 700; text-align: center; padding: 8px 2px; border-radius: 4px; font-size: 13px;
+    font-variant-numeric: tabular-nums; }
+  tr.total td.rnd { font-size: 10px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: var(--muted); font-size: 12px;
+    padding: 10px 4px 0; }
+  .bar { width: 160px; height: 10px; border-radius: 5px;
+    background: linear-gradient(90deg, hsl(0 70% 32%), hsl(35 75% 38%), hsl(55 70% 38%), hsl(105 60% 34%)); }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; background: var(--neg); vertical-align: -2px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">Draft Value Board</h1>
+    <div class="sub" id="subtitle">Loading…</div>
+  </div>
+  <div class="controls">
+    <select id="metric" title="Value metric">
+      <option value="fpor">Points over replacement</option>
+      <option value="pts">Total points</option>
+      <option value="ppg">Points per game</option>
+    </select>
+    <button id="refresh">Refresh</button>
+    <button id="png">Download PNG</button>
+  </div>
+</header>
+<div id="status"></div>
+<div class="scroll"><div id="board"></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script>
+const API = 'https://api.sleeper.app/v1';
+const params = new URLSearchParams(location.search);
+const LEAGUE_ID = params.get('league') || '1370138590712983552';
+const ME = params.get('me') || 'agubernikoff'; // highlights this manager's column
+const POS = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
+const FLEX = {
+  FLEX: ['RB', 'WR', 'TE'], SUPER_FLEX: ['QB', 'RB', 'WR', 'TE'],
+  REC_FLEX: ['WR', 'TE'], WRRB_FLEX: ['RB', 'WR'],
+};
+
+const $ = id => document.getElementById(id);
+const getJSON = async url => {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} from ${url}`);
+  return r.json();
+};
+
+let data = null;
+
+async function load() {
+  $('status').textContent = 'Fetching from Sleeper…';
+  const [state, league, users, drafts] = await Promise.all([
+    getJSON(`${API}/state/nfl`),
+    getJSON(`${API}/league/${LEAGUE_ID}`),
+    getJSON(`${API}/league/${LEAGUE_ID}/users`),
+    getJSON(`${API}/league/${LEAGUE_ID}/drafts`),
+  ]);
+  const draft = drafts.find(d => d.season === league.season) || drafts[0];
+  const qs = POS.map(p => `position[]=${p}`).join('&');
+  const [picks, stats] = await Promise.all([
+    getJSON(`${API}/draft/${draft.draft_id}/picks`),
+    getJSON(`https://api.sleeper.com/stats/nfl/${league.season}?season_type=regular&${qs}`),
+  ]);
+  data = { state, league, users, draft, picks, stats };
+  render();
+  $('status').textContent = `Updated ${new Date().toLocaleTimeString()} · auto-refreshes every 10 min`;
+}
+
+// League-specific fantasy points: sum of stat × league weight for every scoring rule.
+function score(stats, rules) {
+  let s = 0;
+  for (const k in rules) if (stats[k]) s += stats[k] * rules[k];
+  return Math.round(s * 100) / 100;
+}
+
+// Replacement level = best player at each position who would NOT be a starter if every team
+// started the top N at each slot (flex slots filled greedily with the best remaining eligible player).
+function replacementLevels(pool, rosterPositions, teams) {
+  const byPos = Object.fromEntries(POS.map(p => [p, pool.filter(x => x.pos === p).sort((a, b) => b.pts - a.pts)]));
+  const used = Object.fromEntries(POS.map(p => [p, 0]));
+  for (const slot of rosterPositions) if (byPos[slot]) used[slot] += teams;
+  for (const slot of rosterPositions) {
+    const elig = FLEX[slot];
+    if (!elig) continue;
+    for (let i = 0; i < teams; i++) {
+      let best = null;
+      for (const p of elig) {
+        const c = byPos[p][used[p]];
+        if (c && (!best || c.pts > byPos[best][used[best]].pts)) best = p;
+      }
+      if (best) used[best]++;
+    }
+  }
+  const repl = {}, starters = {};
+  for (const p of POS) {
+    starters[p] = used[p];
+    repl[p] = used[p] ? (byPos[p][used[p]]?.pts ?? 0) : null; // null = position not started in this league
+  }
+  return { repl, starters, byPos };
+}
+
+function color(v, max) {
+  if (v == null) return 'var(--neg)';
+  if (v <= 0) return 'var(--neg)';
+  const t = Math.min(1, v / max);
+  const hue = t * 105;
+  return `hsl(${hue} ${60 + 15 * Math.sin(Math.PI * t)}% ${32 + 6 * Math.sin(Math.PI * t)}%)`;
+}
+
+const fmt = (v, signed) => v == null ? 'N/A' : (signed && v > 0 ? '+' : '') + v.toFixed(1);
+const pad = n => String(n).padStart(2, '0');
+
+function render() {
+  const { state, league, users, draft, picks, stats } = data;
+  const metric = $('metric').value;
+  const rules = league.scoring_settings;
+  const teams = draft.settings.teams || league.total_rosters;
+  const rounds = draft.settings.rounds;
+
+  // Every player Sleeper has stats for, scored with league rules.
+  const pool = [];
+  const statById = {};
+  for (const row of stats) {
+    const pos = row.player?.position;
+    if (!POS.includes(pos)) continue;
+    const pts = score(row.stats || {}, rules);
+    const rec = { id: row.player_id, pos, pts, gp: row.stats?.gp || 0 };
+    pool.push(rec);
+    statById[row.player_id] = rec;
+  }
+  const { repl, starters, byPos } = replacementLevels(pool, league.roster_positions, teams);
+  const finishRank = {};
+  for (const p of POS) byPos[p].forEach((x, i) => finishRank[x.id] = i + 1);
+
+  // Header: draft slot → manager
+  const slotUser = {};
+  for (const [uid, slot] of Object.entries(draft.draft_order || {})) slotUser[slot] = uid;
+  const userById = Object.fromEntries(users.map(u => [u.user_id, u]));
+
+  // Positional draft rank (RB1 = first RB drafted)
+  const posCount = {};
+  const cells = {};
+  const teamTotals = {};
+  const sorted = [...picks].sort((a, b) => a.pick_no - b.pick_no);
+  for (const pk of sorted) {
+    const m = pk.metadata || {};
+    const pos = m.position;
+    posCount[pos] = (posCount[pos] || 0) + 1;
+    const st = statById[pk.player_id];
+    const pts = st ? st.pts : 0;
+    const gp = st ? st.gp : 0;
+    const fpor = repl[pos] == null ? null : pts - repl[pos];
+    const val = metric === 'fpor' ? fpor : metric === 'pts' ? pts : (gp ? pts / gp : 0);
+    cells[`${pk.round}-${pk.draft_slot}`] = { pk, m, pos, posRank: posCount[pos], pts, gp, fpor, val,
+      fin: finishRank[pk.player_id] };
+    if (fpor != null) teamTotals[pk.draft_slot] = (teamTotals[pk.draft_slot] || 0) + (metric === 'fpor' ? fpor : val);
+  }
+  const vals = Object.values(cells).map(c => c.val).filter(v => v != null && v > 0);
+  const max = Math.max(1, ...vals);
+
+  const rulesDesc = `${rules.rec === 1 ? 'PPR' : rules.rec === 0.5 ? 'Half-PPR' : rules.rec ? rules.rec + ' PPR' : 'Standard'}`
+    + ` · ${rules.pass_td}pt pass TD`;
+  const replDesc = POS.filter(p => repl[p] != null).map(p => `${p}${starters[p] + 1} ${repl[p].toFixed(1)}`).join(' · ');
+  $('title').textContent = `${league.name} · Draft Value`;
+  $('subtitle').textContent = `${league.season} · ${teams} teams · ${rounds} rounds · ${rulesDesc} · through week ${state.week}`;
+
+  let html = `<div class="board-title">${esc(league.name)} · Draft Value · ${league.season} wk ${state.week}</div><table><thead><tr><th style="width:26px"></th>`;
+  for (let s = 1; s <= teams; s++) {
+    const u = userById[slotUser[s]];
+    const team = u?.metadata?.team_name?.trim() || u?.display_name || `Team ${s}`;
+    html += `<th class="${u?.display_name === ME ? 'me' : ''}" title="${esc(team)}"><span class="tn">${esc(team)}</span><span class="owner">${esc(u?.display_name || '')}</span></th>`;
+  }
+  html += '</tr></thead><tbody>';
+  for (let r = 1; r <= rounds; r++) {
+    html += `<tr><td class="rnd">${r}</td>`;
+    for (let s = 1; s <= teams; s++) {
+      const c = cells[`${r}-${s}`];
+      if (!c) { html += '<td class="pick"></td>'; continue; }
+      const { pk, m } = c;
+      const reversed = draft.type === 'snake' && r % 2 === 0;
+      const pickInRound = reversed ? teams - s + 1 : s;
+      const name = c.pos === 'DEF' ? `${m.first_name} ${m.last_name}` : `${(m.first_name || '')[0] || ''}. ${m.last_name || ''}`;
+      const img = c.pos === 'DEF'
+        ? `<div class="img def"><img crossorigin="anonymous" src="https://sleepercdn.com/images/team_logos/nfl/${pk.player_id.toLowerCase()}.png" onerror="this.remove()"></div>`
+        : `<div class="img"><img crossorigin="anonymous" src="https://sleepercdn.com/content/nfl/players/thumb/${pk.player_id}.jpg" onerror="this.replaceWith(document.createTextNode('${c.pos}'))"></div>`;
+      const label = metric === 'fpor' ? `FPOR ${fmt(c.val, true)}` : metric === 'pts' ? `${fmt(c.val)} pts` : `${fmt(c.val)} ppg`;
+      const tip = `${m.first_name} ${m.last_name} (${c.pos}, ${m.team || ''})\nPick ${pk.pick_no} · drafted ${c.pos}${c.posRank}`
+        + `\n${c.pts.toFixed(1)} pts in ${c.gp} games · currently ${c.pos}${c.fin ?? '—'}`
+        + (c.fpor != null ? `\n${fmt(c.fpor, true)} vs replacement (${repl[c.pos].toFixed(1)})` : '');
+      html += `<td class="pick" style="background:${color(c.val, max)}" title="${esc(tip)}">
+        <div class="top"><span>${r}.${pad(pickInRound)} ${reversed ? '←' : '→'}</span><span>${c.pos}${c.posRank}</span></div>
+        ${img}
+        <div class="name">${esc(name)}</div>
+        <div class="fpor">${label}</div>
+        <div class="fin">${c.pos}${c.fin ?? '—'} · ${c.pts.toFixed(1)} pts</div>
+      </td>`;
+    }
+    html += '</tr>';
+  }
+  // Team totals row
+  const totals = Array.from({ length: teams }, (_, i) => teamTotals[i + 1] || 0);
+  const tMax = Math.max(1, ...totals);
+  html += `<tr class="total"><td class="rnd">Total</td>`;
+  for (const t of totals) html += `<td style="background:${color(t, tMax)}">${metric === 'fpor' ? fmt(t, true) : t.toFixed(1)}</td>`;
+  html += '</tr></tbody></table>';
+  html += `<div class="legend"><span><span class="sw"></span> ≤ 0 / N/A</span><span class="bar"></span><span>0 → best</span>
+    <span>Replacement: ${esc(replDesc)}</span><span>Scored with this league's Sleeper settings · data: Sleeper API</span></div>`;
+  $('board').innerHTML = html;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function downloadPNG() {
+  const board = $('board');
+  board.classList.add('exporting');
+  try {
+    const canvas = await html2canvas(board, { useCORS: true, backgroundColor: '#0e0f11', scale: 2 });
+    const a = document.createElement('a');
+    a.download = `draft-value-wk${data?.state?.week ?? ''}.png`;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  } finally {
+    board.classList.remove('exporting');
+  }
+}
+
+const safeLoad = () => load().catch(e => { $('status').textContent = 'Error: ' + e.message; console.error(e); });
+$('refresh').onclick = safeLoad;
+$('metric').onchange = () => data && render();
+$('png').onclick = downloadPNG;
+safeLoad();
+setInterval(() => { if (!document.hidden) safeLoad(); }, 10 * 60 * 1000);
+</script>
+</body>
+</html>
